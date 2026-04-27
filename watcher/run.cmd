@@ -10,8 +10,8 @@ if not exist "%SCRIPT_DIR%.env" (
   exit /b 1
 )
 
-for /f "usebackq tokens=1,* delims==" %%A in ("%SCRIPT_DIR%.env") do (
-  if not "%%A"=="" if not "%%A:~0,1%"=="#" set "%%A=%%B"
+for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%SCRIPT_DIR%.env") do (
+  if not "%%A"=="" set "%%A=%%B"
 )
 
 node "%SCRIPT_DIR%sync.js"
