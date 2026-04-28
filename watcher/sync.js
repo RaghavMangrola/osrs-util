@@ -14,6 +14,19 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 
+const LOG_FILE = path.join(__dirname, 'sync.log');
+const _log = console.log.bind(console);
+console.log = (...args) => {
+  const line = args.join(' ');
+  _log(line);
+  fs.appendFileSync(LOG_FILE, line + '\n');
+};
+console.error = (...args) => {
+  const line = '[ERROR] ' + args.join(' ');
+  _log(line);
+  fs.appendFileSync(LOG_FILE, line + '\n');
+};
+
 const PROFILES_DIR = path.join(process.env.USERPROFILE || 'C:/Users/raghav', '.runelite', 'profiles2');
 const WORKER_URL = process.env.BANK_WORKER_URL;
 const AUTH_SECRET = process.env.BANK_AUTH_SECRET;
