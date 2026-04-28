@@ -30,8 +30,7 @@ console.error = (...args) => {
 const PROFILES_DIR = path.join(process.env.USERPROFILE || 'C:/Users/raghav', '.runelite', 'profiles2');
 const WORKER_URL = process.env.BANK_WORKER_URL;
 const AUTH_SECRET = process.env.BANK_AUTH_SECRET;
-const HOURLY_MS = 60 * 60 * 1000;
-const DEBOUNCE_MS = 3000;
+const POLL_MS = 5 * 60 * 1000;
 
 if (!WORKER_URL || !AUTH_SECRET) {
   console.error('Missing BANK_WORKER_URL or BANK_AUTH_SECRET env vars');
@@ -40,7 +39,6 @@ if (!WORKER_URL || !AUTH_SECRET) {
 
 // Track last uploaded payload hash to avoid redundant uploads
 let lastPayloadHash = null;
-let debounceTimer = null;
 
 // --- Parsing ---
 
@@ -235,20 +233,6 @@ console.log(`[${ts()}] Starting bank-sync watcher`);
 console.log(`[${ts()}] Watching: ${PROFILES_DIR}`);
 console.log(`[${ts()}] Worker:   ${WORKER_URL}`);
 
-// Initial sync
+// Initial sync then poll every 5 minutes
 sync('startup');
-
-// Hourly fallback
-setInterval(() => sync('hourly'), HOURLY_MS);
-
-// File watcher with debounce
-try {
-  fs.watch(PROFILES_DIR, { persistent: true }, (event, filename) => {
-    if (!filename || !filename.endsWith('.properties')) return;
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => sync(`file change: ${filename}`), DEBOUNCE_MS);
-  });
-  console.log(`[${ts()}] File watcher active`);
-} catch (err) {
-  console.warn(`[${ts()}] Could not watch directory: ${err.message} — hourly sync only`);
-}
+setInterval(() => sync('poll'), POLL_MS);
