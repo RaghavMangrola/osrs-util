@@ -78,6 +78,19 @@ function parseCurrentList(raw) {
   }
 }
 
+const MONTHS = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+function parseSnapshotDate(dateTimeString) {
+  // Format: "HH:MM:SS, D Mon YYYY"
+  try {
+    const [time, rest] = dateTimeString.split(', ');
+    const [day, mon, year] = rest.split(' ');
+    const [h, m, s] = time.split(':');
+    return new Date(+year, MONTHS[mon], +day, +h, +m, +s).getTime();
+  } catch {
+    return 0;
+  }
+}
+
 function parseItemData(itemDataStr) {
   const parts = itemDataStr.replace(/,$/, '').split(',');
   const items = [];
@@ -123,7 +136,7 @@ function extractAllAccounts() {
       const hash = entry.accountIdentifier;
       if (!hash) continue;
       const existing = latestByHash[hash];
-      if (!existing || entry.id > existing.id) {
+      if (!existing || parseSnapshotDate(entry.dateTimeString) > parseSnapshotDate(existing.dateTimeString)) {
         latestByHash[hash] = entry;
       }
     }
