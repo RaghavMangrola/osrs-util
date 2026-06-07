@@ -40,26 +40,35 @@ async function handleIngest(request, env) {
 
   const index = JSON.parse(await env.BANK_KV.get('accounts') || '{}');
   const now = new Date().toISOString();
+  let upserted = 0;
+  let indexChanged = false;
 
   for (const account of accounts) {
     const { hash, name, worldType, snapshotTime, items } = account;
     if (!hash || !Array.isArray(items)) continue;
 
-    await env.BANK_KV.put(`bank:${hash}`, JSON.stringify({
-      hash,
-      name: name || hash,
-      worldType,
-      snapshotTime,
-      uploadedAt: now,
-      items,
-    }));
+    const newValue = JSON.stringify({ hash, name: name || hash, worldType, snapshotTime, uploadedAt: now, items });
+    const existing = await env.BANK_KV.get(`bank:${hash}`);
 
-    index[hash] = { name: name || hash, snapshotTime, uploadedAt: now };
+    // Only write if items or snapshotTime changed (ignore uploadedAt in comparison)
+    const existingParsed = existing ? JSON.parse(existing) : null;
+    const changed = !existingParsed
+      || existingParsed.snapshotTime !== snapshotTime
+      || JSON.stringify(existingParsed.items) !== JSON.stringify(items);
+
+    if (changed) {
+      await env.BANK_KV.put(`bank:${hash}`, newValue);
+      index[hash] = { name: name || hash, snapshotTime, uploadedAt: now };
+      indexChanged = true;
+      upserted++;
+    }
   }
 
-  await env.BANK_KV.put('accounts', JSON.stringify(index));
+  if (indexChanged) {
+    await env.BANK_KV.put('accounts', JSON.stringify(index));
+  }
 
-  return new Response(JSON.stringify({ ok: true, upserted: accounts.length }), {
+  return new Response(JSON.stringify({ ok: true, upserted }), {
     headers: { 'Content-Type': 'application/json' },
   });
 }

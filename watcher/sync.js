@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const { extractAccounts, buildSyncPayload } = require('./parse');
 
 const LOG_FILE = path.join(__dirname, 'sync.log');
 const _log = console.log.bind(console);
@@ -28,9 +29,10 @@ console.error = (...args) => {
 };
 
 const PROFILES_DIR = path.join(process.env.USERPROFILE || 'C:/Users/raghav', '.runelite', 'profiles2');
+const RSPROFILE = path.join(PROFILES_DIR, '$rsprofile--1.properties');
 const WORKER_URL = process.env.BANK_WORKER_URL;
 const AUTH_SECRET = process.env.BANK_AUTH_SECRET;
-const POLL_MS = 5 * 60 * 1000;
+const POLL_MS = 10 * 60 * 1000;
 
 if (!WORKER_URL || !AUTH_SECRET) {
   console.error('Missing BANK_WORKER_URL or BANK_AUTH_SECRET env vars');
@@ -40,114 +42,12 @@ if (!WORKER_URL || !AUTH_SECRET) {
 // Track last uploaded payload hash to avoid redundant uploads
 let lastPayloadHash = null;
 
-// --- Parsing ---
-
-function parseProperties(content) {
-  const result = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('!')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx === -1) continue;
-    result[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1);
-  }
-  return result;
-}
-
-function unescapePropertiesValue(value) {
-  return value.replace(/\\:/g, ':').replace(/\\#/g, '#');
-}
-
-function parseNameMap(raw) {
-  if (!raw) return {};
-  try {
-    return JSON.parse(unescapePropertiesValue(raw));
-  } catch {
-    return {};
-  }
-}
-
-function parseCurrentList(raw) {
-  if (!raw) return [];
-  try {
-    return JSON.parse(unescapePropertiesValue(raw));
-  } catch {
-    return [];
-  }
-}
-
-const MONTHS = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
-function parseSnapshotDate(dateTimeString) {
-  // Format: "HH:MM:SS, D Mon YYYY"
-  try {
-    const [time, rest] = dateTimeString.split(', ');
-    const [day, mon, year] = rest.split(' ');
-    const [h, m, s] = time.split(':');
-    return new Date(+year, MONTHS[mon], +day, +h, +m, +s).getTime();
-  } catch {
-    return 0;
-  }
-}
-
-function parseItemData(itemDataStr) {
-  const parts = itemDataStr.replace(/,$/, '').split(',');
-  const items = [];
-  for (let i = 0; i + 1 < parts.length; i += 2) {
-    const id = parseInt(parts[i]);
-    const qty = parseInt(parts[i + 1]);
-    if (!isNaN(id) && !isNaN(qty)) items.push({ id, qty });
-  }
-  return items;
-}
-
 // --- Aggregation ---
 
 function extractAllAccounts() {
-  const files = fs.readdirSync(PROFILES_DIR).filter(
-    f => f.endsWith('.properties') && !f.startsWith('._')
-  );
-
-  // Map of hash -> latest snapshot across all profile files
-  const latestByHash = {};
-  // Map of hash -> name (from any nameMap that has it)
-  const nameByHash = {};
-
-  for (const file of files) {
-    let content;
-    try {
-      content = fs.readFileSync(path.join(PROFILES_DIR, file), 'utf-8');
-    } catch {
-      continue;
-    }
-
-    const props = parseProperties(content);
-    const nameMap = parseNameMap(props['bankMemory.nameMap']);
-    const list = parseCurrentList(props['bankMemory.currentList']);
-
-    // Merge names
-    for (const [key, name] of Object.entries(nameMap)) {
-      nameByHash[key] = name;
-    }
-
-    // Keep latest snapshot per account hash
-    for (const entry of list) {
-      const hash = entry.accountIdentifier;
-      if (!hash) continue;
-      const existing = latestByHash[hash];
-      if (!existing || parseSnapshotDate(entry.dateTimeString) > parseSnapshotDate(existing.dateTimeString)) {
-        latestByHash[hash] = entry;
-      }
-    }
-  }
-
-  // Build output
-  return Object.values(latestByHash).map(entry => ({
-    hash: entry.accountIdentifier,
-    name: nameByHash[entry.accountIdentifier] || entry.accountIdentifier,
-    worldType: entry.worldType,
-    snapshotTime: entry.dateTimeString,
-    items: parseItemData(entry.itemData),
-  }));
+  const content = fs.readFileSync(RSPROFILE, 'utf-8');
+  const accounts = extractAccounts(content);
+  return buildSyncPayload(accounts);
 }
 
 // --- Upload ---
@@ -233,6 +133,6 @@ console.log(`[${ts()}] Starting bank-sync watcher`);
 console.log(`[${ts()}] Watching: ${PROFILES_DIR}`);
 console.log(`[${ts()}] Worker:   ${WORKER_URL}`);
 
-// Initial sync then poll every 5 minutes
+// Initial sync then poll every 10 minutes
 sync('startup');
 setInterval(() => sync('poll'), POLL_MS);
