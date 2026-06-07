@@ -28,7 +28,7 @@ console.error = (...args) => {
   fs.appendFileSync(LOG_FILE, line + '\n');
 };
 
-const PROFILES_DIR = path.join(process.env.USERPROFILE || 'C:/Users/raghav', '.runelite', 'profiles2');
+const PROFILES_DIR = path.join(process.env.USERPROFILE, '.runelite', 'profiles2');
 const RSPROFILE = path.join(PROFILES_DIR, '$rsprofile--1.properties');
 const WORKER_URL = process.env.BANK_WORKER_URL;
 const AUTH_SECRET = process.env.BANK_AUTH_SECRET;
