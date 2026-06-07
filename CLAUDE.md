@@ -1,38 +1,34 @@
-# bank-sync
+# osrs-utilities
 
-Syncs RuneLite bank data to Cloudflare KV via a Worker. The watcher reads data from the "Dude Where's My Stuff" (DWMS) RuneLite plugin and uploads bank snapshots. Part of a larger collection of OSRS-related projects.
+Monorepo for Old School RuneScape tooling. Each subdirectory is an independent project with its own tech stack and deploy pipeline.
 
-## Architecture
+## Projects
 
-- **watcher/** — Node.js script (no dependencies) that polls `$rsprofile--1.properties` every 10 minutes and POSTs bank data to the worker. Runs on Windows via Task Scheduler at login (`run-hidden.vbs` wraps `run.cmd`).
-- **worker/** — Cloudflare Worker with KV storage. Endpoints: `POST /bank` (ingest), `GET /accounts`, `GET /bank/:hash`. All require Bearer auth.
-- **watcher/parse.js** — Parsing module, tested separately. Reads DWMS item data and resolves account display names from rsprofile keys.
+### bank-sync/
+Syncs RuneLite bank data to Cloudflare KV via a Worker. A Node.js watcher polls the "Dude Where's My Stuff" plugin data and POSTs snapshots to a Cloudflare Worker. Runs on Windows via Task Scheduler.
 
-## Data source
+- See [bank-sync/CLAUDE.md](bank-sync/CLAUDE.md) for details.
 
-DWMS stores data in `~/.runelite/profiles2/$rsprofile--1.properties` with keys like:
-- `dudewheresmystuff.rsprofile.<hash>.<category>.<storage>=<data>`
-- Items are `itemIdxqty` comma-separated, some with a `timestamp;` prefix
-- Account display names come from `rsprofile.rsprofile.<hash>.displayName`
-- `-1` item IDs are empty slots, filtered out during parsing
+### hermes/
+Tauri desktop app (React/TypeScript frontend, Rust backend) for managing and launching OSRS executables — RuneLite configs, farming herb presets, etc. Builds to an MSI installer.
 
-## Commands
+- See [hermes/CLAUDE.md](hermes/CLAUDE.md) for details.
+
+## Quick reference
 
 ```
-# Run tests
-node --test watcher/parse.test.js
+# bank-sync: run tests
+node --test bank-sync/watcher/parse.test.js
 
-# Run watcher (needs .env)
-cd watcher && node sync.js
+# bank-sync: deploy worker
+cd bank-sync/worker && npx wrangler deploy
 
-# Deploy worker
-cd worker && npx wrangler deploy
+# hermes: dev mode
+cd hermes && npm run tauri dev
+
+# hermes: run frontend tests
+cd hermes && npm run test
+
+# hermes: build installer
+cd hermes && npm run tauri build
 ```
-
-## Watcher env vars
-
-See `watcher/.env.example`: `BANK_WORKER_URL`, `BANK_AUTH_SECRET`
-
-## Worker secrets
-
-`AUTH_SECRET` — set via `npx wrangler secret put AUTH_SECRET`
