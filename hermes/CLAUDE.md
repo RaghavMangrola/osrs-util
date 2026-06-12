@@ -16,9 +16,9 @@ This is one of several OSRS-related projects that may share a consolidated repos
 
 ### Build & Install
 - `npm run build` — TypeScript compile + Vite build (output in `/dist/`)
-- `npm run tauri build` — Build bundled desktop application (MSI installer)
-- `powershell -ExecutionPolicy Bypass -File install.ps1` — Quiet-install the built MSI
-- Build output: `src-tauri/target/release/bundle/msi/`
+- `npm run tauri build` — Build bundled desktop application (NSIS installer, per-user, no UAC prompt)
+- `npm run install:app` — Silently install the built installer
+- Build output: `src-tauri/target/release/bundle/nsis/`
 
 ### Shell Environment (Claude Code on Windows)
 When running commands from Claude Code's bash shell, `npm` and `cargo` are not on PATH by default. Prefix commands with:
