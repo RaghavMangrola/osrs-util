@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OSRS Herb Bank</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="bank-titlebar">
+          <button id="refresh" class="refresh-button" type="button" aria-label="Refresh bank data">&#x21BA;</button>
+        </div>
+        <div class="bank-tabs" role="tablist" aria-label="Bank tabs">
+          <button class="bank-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="herbs-panel" data-tab="herbs">
+            <img class="bank-tab-icon" src="https://static.runelite.net/cache/item/icon/249.png" alt="" />
+            <span class="sr-only">Herbs</span>
+          </button>
+          <button class="bank-tab" type="button" role="tab" aria-selected="false" aria-controls="advisor-panel" data-tab="advisor">
+            <img class="bank-tab-icon" src="https://static.runelite.net/cache/item/icon/2434.png" alt="" />
+            <span class="sr-only">Advisor</span>
+          </button>
+        </div>
+      </header>
+
+      <section id="herbs-panel" class="panel" aria-labelledby="herbs-title" data-tab-panel="herbs">
+        <h2 id="herbs-title" class="sr-only">Herbs</h2>
+        <div id="herbs" class="bank-window"></div>
+      </section>
+
+      <section id="advisor-panel" class="panel is-hidden" aria-labelledby="advisor-title" data-tab-panel="advisor" hidden>
+        <h2 id="advisor-title" class="sr-only">Advisor</h2>
+        <div id="advisor" class="bank-window advisor-window"></div>
+      </section>
+
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

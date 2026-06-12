@@ -1,0 +1,16 @@
+{
+  "name": "osrs-bank-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260424.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.85.0"
+  }
+}

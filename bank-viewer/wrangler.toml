@@ -1,0 +1,11 @@
+name = "osrs-bank-viewer"
+compatibility_date = "2026-04-28"
+pages_build_output_dir = "public"
+
+[[kv_namespaces]]
+binding = "BANK_KV"
+id = "ec9058b898b14e31b73f64979271b272"
+
+[vars]
+BANK_KEY = "bank:accId#hash1#-2426420333369957777"
+STATS_PLAYER = "funmaxxing"
