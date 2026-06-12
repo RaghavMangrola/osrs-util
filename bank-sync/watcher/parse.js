@@ -89,18 +89,30 @@ function extractAccounts(content) {
   return accounts;
 }
 
+function mergeItems(...itemLists) {
+  const byId = new Map();
+  for (const items of itemLists) {
+    for (const { id, qty } of items) {
+      byId.set(id, (byId.get(id) || 0) + qty);
+    }
+  }
+  return [...byId.entries()].map(([id, qty]) => ({ id, qty }));
+}
+
 function buildSyncPayload(accounts) {
   return Object.values(accounts).map(account => {
     const bankRaw = account.storages.world?.bank;
-    if (!bankRaw) return null;
+    const seedVaultRaw = account.storages.world?.seedvault;
+    if (!bankRaw && !seedVaultRaw) return null;
 
-    const { timestamp, items } = parseItemList(bankRaw);
+    const bank = parseItemList(bankRaw);
+    const seedVault = parseItemList(seedVaultRaw);
 
     return {
       hash: account.hash,
       name: account.displayName || account.hash,
-      snapshotTime: timestamp,
-      items,
+      snapshotTime: Math.max(bank.timestamp || 0, seedVault.timestamp || 0) || null,
+      items: mergeItems(bank.items, seedVault.items),
     };
   }).filter(Boolean);
 }

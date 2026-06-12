@@ -175,12 +175,56 @@ describe('buildSyncPayload', () => {
     ]);
   });
 
-  it('skips accounts without bank data', () => {
+  it('skips accounts without bank or seed vault data', () => {
     const accounts = extractAccounts(
       'dudewheresmystuff.rsprofile.abc123.carryable.inventory=563x1'
     );
     const payload = buildSyncPayload(accounts);
     assert.equal(payload.length, 0);
+  });
+
+  it('includes seed vault items', () => {
+    const accounts = extractAccounts([
+      'dudewheresmystuff.rsprofile.abc123.world.bank=1780859561852;563x1572',
+      'dudewheresmystuff.rsprofile.abc123.world.seedvault=1780859561999;5295x71,5318x10',
+    ].join('\n'));
+    const payload = buildSyncPayload(accounts);
+    assert.deepEqual(payload[0].items, [
+      { id: 563, qty: 1572 },
+      { id: 5295, qty: 71 },
+      { id: 5318, qty: 10 },
+    ]);
+  });
+
+  it('sums quantities for items in both bank and seed vault', () => {
+    const accounts = extractAccounts([
+      'dudewheresmystuff.rsprofile.abc123.world.bank=5295x6,563x1',
+      'dudewheresmystuff.rsprofile.abc123.world.seedvault=5295x15',
+    ].join('\n'));
+    const payload = buildSyncPayload(accounts);
+    assert.deepEqual(payload[0].items, [
+      { id: 5295, qty: 21 },
+      { id: 563, qty: 1 },
+    ]);
+  });
+
+  it('includes accounts with only seed vault data', () => {
+    const accounts = extractAccounts(
+      'dudewheresmystuff.rsprofile.abc123.world.seedvault=1780859561999;5295x71'
+    );
+    const payload = buildSyncPayload(accounts);
+    assert.equal(payload.length, 1);
+    assert.deepEqual(payload[0].items, [{ id: 5295, qty: 71 }]);
+    assert.equal(payload[0].snapshotTime, 1780859561999);
+  });
+
+  it('uses latest timestamp across bank and seed vault', () => {
+    const accounts = extractAccounts([
+      'dudewheresmystuff.rsprofile.abc123.world.bank=100;563x1',
+      'dudewheresmystuff.rsprofile.abc123.world.seedvault=200;5295x1',
+    ].join('\n'));
+    const payload = buildSyncPayload(accounts);
+    assert.equal(payload[0].snapshotTime, 200);
   });
 
   it('filters -1 items from bank', () => {
