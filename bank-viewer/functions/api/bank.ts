@@ -1,6 +1,12 @@
 interface Env {
   BANK_KV: KVNamespace;
   BANK_KEY?: string;
+  BANK_PLAYER?: string;
+}
+
+interface AccountIndexEntry {
+  name?: string;
+  uploadedAt?: string;
 }
 
 interface BankItem {
@@ -474,6 +480,11 @@ async function readBankPayload(env: Env): Promise<{ key: string; value: string }
     return value ? { key: env.BANK_KEY, value } : null;
   }
 
+  if (env.BANK_PLAYER) {
+    const fromIndex = await readLatestAccountByName(env, env.BANK_PLAYER);
+    if (fromIndex) return fromIndex;
+  }
+
   const keys = await env.BANK_KV.list();
   for (const key of keys.keys) {
     const value = await env.BANK_KV.get(key.name);
@@ -483,6 +494,39 @@ async function readBankPayload(env: Env): Promise<{ key: string; value: string }
   }
 
   return null;
+}
+
+async function readLatestAccountByName(
+  env: Env,
+  player: string
+): Promise<{ key: string; value: string } | null> {
+  const indexRaw = await env.BANK_KV.get("accounts");
+  if (!indexRaw) return null;
+
+  let index: Record<string, AccountIndexEntry>;
+  try {
+    index = JSON.parse(indexRaw);
+  } catch {
+    return null;
+  }
+
+  const target = player.toLowerCase();
+  let bestHash: string | null = null;
+  let bestUploadedAt = "";
+
+  for (const [hash, entry] of Object.entries(index)) {
+    if (entry?.name?.toLowerCase() !== target) continue;
+    const uploadedAt = entry.uploadedAt ?? "";
+    if (!bestHash || uploadedAt > bestUploadedAt) {
+      bestHash = hash;
+      bestUploadedAt = uploadedAt;
+    }
+  }
+
+  if (!bestHash) return null;
+  const key = `bank:${bestHash}`;
+  const value = await env.BANK_KV.get(key);
+  return value ? { key, value } : null;
 }
 
 function looksLikeBankPayload(value: string): boolean {

@@ -7,5 +7,5 @@ binding = "BANK_KV"
 id = "ec9058b898b14e31b73f64979271b272"
 
 [vars]
-BANK_KEY = "bank:accId#hash1#-2426420333369957777"
+BANK_PLAYER = "funmaxxing"
 STATS_PLAYER = "funmaxxing"
