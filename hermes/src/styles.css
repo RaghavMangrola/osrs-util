@@ -623,6 +623,17 @@ body {
   font-weight: 600;
 }
 
+.seed-bank-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.seed-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .seed-snapshot {
   font-size: 11px;
   color: var(--text-muted);
@@ -638,20 +649,44 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+  width: 100%;
   padding: 8px 12px;
   border-radius: var(--radius);
   background: var(--bg-input);
   border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   transition: all 0.15s;
+}
+
+.seed-row:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-hover, var(--accent-dim));
+}
+
+.seed-row:disabled {
+  cursor: default;
 }
 
 .seed-row.seed-active {
   border-color: var(--accent);
   background: var(--accent-dim);
+  cursor: default;
 }
 
 .seed-row.seed-empty {
-  opacity: 0.4;
+  opacity: 0.5;
+}
+
+.seed-row.seed-empty:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.seed-row.seed-updating {
+  opacity: 0.6;
 }
 
 .seed-name {
