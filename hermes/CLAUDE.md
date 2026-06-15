@@ -18,6 +18,7 @@ This is one of several OSRS-related projects that may share a consolidated repos
 - `npm run build` — TypeScript compile + Vite build (output in `/dist/`)
 - `npm run tauri build` — Build bundled desktop application (NSIS installer, per-user, no UAC prompt)
 - `npm run install:app` — Silently install the built installer
+- `npm run update:app` — Hot-swap update an already-installed Hermes: rebuilds the release exe and copies it over `%LOCALAPPDATA%\hermes\hermes.exe` (closing/relaunching the app), skipping the NSIS installer. Faster than a full build+install; leaves the "Installed apps" version string stale until the real installer runs again.
 - Build output: `src-tauri/target/release/bundle/nsis/`
 
 ### Shell Environment (Claude Code on Windows)

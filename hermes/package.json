@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "tauri": "tauri",
     "install:app": "node install.js",
+    "update:app": "node update.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

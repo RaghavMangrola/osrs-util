@@ -45,4 +45,7 @@ cd hermes && npm run test
 
 # hermes: build installer
 cd hermes && npm run tauri build
+
+# hermes: hot-swap update an installed build (no installer)
+cd hermes && npm run update:app
 ```
