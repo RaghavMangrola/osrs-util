@@ -25,7 +25,12 @@ const VALID_HERBS: &[&str] = &[
 ];
 
 const PROFILES_DIR: &str = "C:/Users/raghav/.runelite/profiles2";
-const FUNMAXXING_ACCOUNT: &str = "accId#hash1#-2426420333369957777";
+const RSPROFILE_FILE: &str = "$rsprofile--1.properties";
+const FUNMAXXING_DISPLAY_NAME: &str = "funmaxxing";
+
+// "Dude Where's My Stuff" (DWMS) property key prefixes, shared with bank-sync/watcher/parse.js.
+const DWMS_PREFIX: &str = "dudewheresmystuff.rsprofile.";
+const DISPLAY_NAME_PREFIX: &str = "rsprofile.rsprofile.";
 
 const HERB_SEED_IDS: &[(u32, &str)] = &[
     (5291, "GUAM"),
@@ -209,101 +214,146 @@ pub struct BankSeedData {
     pub snapshot_date: String,
 }
 
-fn parse_date_sortable(date_str: &str) -> String {
-    // "00:32:11, 3 Jun 2026" -> "2026-06-03 00:32:11"
-    let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    let parts: Vec<&str> = date_str.splitn(2, ", ").collect();
-    if parts.len() != 2 { return String::new(); }
-    let time = parts[0].trim();
-    let date_parts: Vec<&str> = parts[1].trim().split_whitespace().collect();
-    if date_parts.len() != 3 { return String::new(); }
-    let day: u32 = date_parts[0].parse().unwrap_or(0);
-    let month = months.iter().position(|&m| m == date_parts[1]).map(|i| i + 1).unwrap_or(0);
-    let year: u32 = date_parts[2].parse().unwrap_or(0);
-    format!("{:04}-{:02}-{:02} {}", year, month, day, time)
+/// Parse a `key=value` properties file into a map, skipping blanks and comments.
+fn parse_props(content: &str) -> HashMap<&str, &str> {
+    let mut props = HashMap::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
+            continue;
+        }
+        if let Some((key, value)) = trimmed.split_once('=') {
+            props.insert(key.trim(), value);
+        }
+    }
+    props
 }
 
-fn parse_bank_entries(content: &str) -> Vec<serde_json::Value> {
-    let key_prefix = "bankMemory.currentList=";
-    let Some(line) = content.lines().find(|l| l.starts_with(key_prefix)) else {
-        return Vec::new();
-    };
-    let raw_json = &line[key_prefix.len()..];
-    let json_str = raw_json.replace("\\:", ":").replace("\\#", "#").replace("\\=", "=");
-    serde_json::from_str(&json_str).unwrap_or_default()
+/// Parse a DWMS storage value: an optional `<epochMs>;` prefix followed by a
+/// comma-separated `<itemId>x<qty>` list. Returns the timestamp (if present) and
+/// the items, mirroring bank-sync/watcher/parse.js. `-1` ids (empty slots) are dropped.
+fn parse_dwms_value(raw: &str) -> (Option<i64>, Vec<(i64, i64)>) {
+    let mut timestamp = None;
+    let mut item_str = raw;
+    if let Some(semi) = raw.find(';') {
+        let maybe_ts = &raw[..semi];
+        if !maybe_ts.is_empty() && maybe_ts.bytes().all(|b| b.is_ascii_digit()) {
+            timestamp = maybe_ts.parse::<i64>().ok();
+            item_str = &raw[semi + 1..];
+        }
+    }
+
+    let mut items = Vec::new();
+    for part in item_str.split(',') {
+        let Some(x) = part.find('x') else { continue };
+        let (Ok(id), Ok(qty)) = (part[..x].parse::<i64>(), part[x + 1..].parse::<i64>()) else {
+            continue;
+        };
+        if id == -1 {
+            continue;
+        }
+        items.push((id, qty));
+    }
+
+    (timestamp, items)
+}
+
+/// Format an epoch-milliseconds timestamp as "YYYY-MM-DD HH:MM:SS UTC".
+/// Uses Howard Hinnant's days-to-civil algorithm to avoid a date dependency.
+fn format_epoch_ms(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let (hh, mm, ss) = (tod / 3600, (tod % 3600) / 60, tod % 60);
+
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC", year, m, d, hh, mm, ss)
+}
+
+/// Resolve the funmaxxing account's herb-seed-bearing storages (bank + seed vault)
+/// from a parsed `$rsprofile` properties file, merging quantities across both.
+/// Returns the merged item id -> qty map and the newest storage timestamp (epoch ms).
+fn extract_funmaxxing_items(content: &str) -> Result<(HashMap<i64, i64>, Option<i64>), String> {
+    let props = parse_props(content);
+
+    // Resolve funmaxxing account hash(es) by display name (one rsprofile file holds many accounts).
+    let hashes: Vec<&str> = props
+        .iter()
+        .filter_map(|(key, value)| {
+            let hash = key
+                .strip_prefix(DISPLAY_NAME_PREFIX)?
+                .strip_suffix(".displayName")?;
+            (value.trim() == FUNMAXXING_DISPLAY_NAME).then_some(hash)
+        })
+        .collect();
+    if hashes.is_empty() {
+        return Err(format!("No account named '{}' found", FUNMAXXING_DISPLAY_NAME));
+    }
+
+    // The display name is reused across alts; keep the hash with the freshest bank/seed-vault data.
+    let mut best: Option<(Option<i64>, HashMap<i64, i64>)> = None;
+    for hash in hashes {
+        let bank_key = format!("{}{}.world.bank", DWMS_PREFIX, hash);
+        let vault_key = format!("{}{}.world.seedvault", DWMS_PREFIX, hash);
+        let storages: Vec<(Option<i64>, Vec<(i64, i64)>)> = [bank_key, vault_key]
+            .iter()
+            .filter_map(|k| props.get(k.as_str()).map(|v| parse_dwms_value(v)))
+            .collect();
+        if storages.is_empty() {
+            continue;
+        }
+
+        let mut merged: HashMap<i64, i64> = HashMap::new();
+        let mut timestamp: Option<i64> = None;
+        for (ts, items) in storages {
+            if let Some(ts) = ts {
+                timestamp = Some(timestamp.map_or(ts, |cur| cur.max(ts)));
+            }
+            for (id, qty) in items {
+                *merged.entry(id).or_insert(0) += qty;
+            }
+        }
+
+        let is_newer = best
+            .as_ref()
+            .map_or(true, |(best_ts, _)| timestamp.unwrap_or(0) > best_ts.unwrap_or(0));
+        if is_newer {
+            best = Some((timestamp, merged));
+        }
+    }
+
+    best
+        .map(|(timestamp, items)| (items, timestamp))
+        .ok_or_else(|| format!("No bank or seed vault data found for '{}'", FUNMAXXING_DISPLAY_NAME))
 }
 
 #[tauri::command]
 fn get_herb_seeds() -> Result<BankSeedData, String> {
-    let dir = PathBuf::from(PROFILES_DIR);
-    if !dir.exists() {
-        return Err(format!("Profiles directory not found: {}", dir.display()));
-    }
+    let path = PathBuf::from(PROFILES_DIR).join(RSPROFILE_FILE);
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-    let mut best_entry: Option<serde_json::Value> = None;
-    let mut best_date = String::new();
-
-    for file in fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let file = match file {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-        let path = file.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("properties") {
-            continue;
-        }
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        for entry in parse_bank_entries(&content) {
-            let is_funmaxxing = entry.get("accountIdentifier")
-                .and_then(|v| v.as_str()) == Some(FUNMAXXING_ACCOUNT);
-            if !is_funmaxxing { continue; }
-            // Parse "HH:MM:SS, DD Mon YYYY" to compare dates
-            let date_str = entry.get("dateTimeString")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            // Convert to sortable "YYYY Mon DD HH:MM:SS" for comparison
-            // Format: "00:32:11, 3 Jun 2026" -> sortable key
-            let sortable = parse_date_sortable(date_str);
-            if sortable > best_date {
-                best_date = sortable;
-                best_entry = Some(entry);
-            }
-        }
-    }
-
-    let entry = best_entry.ok_or("No bank data found for funmaxxing")?;
-
-    let snapshot_date = entry.get("dateTimeString")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let item_data = entry.get("itemData")
-        .and_then(|v| v.as_str())
-        .ok_or("No itemData in bank entry")?;
-
-    let parts: Vec<&str> = item_data.split(',').collect();
-    let mut item_map: HashMap<u32, u32> = HashMap::new();
-    let mut i = 0;
-    while i + 1 < parts.len() {
-        if let (Ok(id), Ok(qty)) = (parts[i].parse::<u32>(), parts[i + 1].parse::<u32>()) {
-            item_map.insert(id, qty);
-            i += 2;
-        } else {
-            i += 1;
-        }
-    }
+    let (items, snapshot_ms) = extract_funmaxxing_items(&content)?;
 
     let seeds: Vec<HerbSeedCount> = HERB_SEED_IDS.iter().map(|(id, name)| {
         HerbSeedCount {
             herb: name.to_string(),
             item_id: *id,
-            quantity: item_map.get(id).copied().unwrap_or(0),
+            quantity: items.get(&(*id as i64)).copied().unwrap_or(0).max(0) as u32,
         }
     }).collect();
+
+    let snapshot_date = snapshot_ms.map(format_epoch_ms).unwrap_or_else(|| "unknown".to_string());
 
     Ok(BankSeedData { seeds, snapshot_date })
 }
@@ -709,5 +759,94 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         assert_eq!(id.len(), 36);
         assert_eq!(id.chars().filter(|c| *c == '-').count(), 4);
+    }
+
+    // --- DWMS herb seed parsing tests ---
+
+    #[test]
+    fn parse_dwms_value_with_timestamp() {
+        let (ts, items) = parse_dwms_value("1781511529841;5291x93,5292x82,5304x26");
+        assert_eq!(ts, Some(1781511529841));
+        assert_eq!(items, vec![(5291, 93), (5292, 82), (5304, 26)]);
+    }
+
+    #[test]
+    fn parse_dwms_value_without_timestamp() {
+        let (ts, items) = parse_dwms_value("5291x10,5292x20");
+        assert_eq!(ts, None);
+        assert_eq!(items, vec![(5291, 10), (5292, 20)]);
+    }
+
+    #[test]
+    fn parse_dwms_value_drops_empty_slots() {
+        let (_, items) = parse_dwms_value("100;5291x5,-1x0,5292x7");
+        assert_eq!(items, vec![(5291, 5), (5292, 7)]);
+    }
+
+    #[test]
+    fn parse_dwms_value_skips_malformed_parts() {
+        let (_, items) = parse_dwms_value("5291x5,garbage,5292xNaN,5293x9");
+        assert_eq!(items, vec![(5291, 5), (5293, 9)]);
+    }
+
+    #[test]
+    fn parse_dwms_value_empty() {
+        let (ts, items) = parse_dwms_value("");
+        assert_eq!(ts, None);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn format_epoch_ms_known_value() {
+        // 1781511529841 ms = 2026-06-15 ... (sanity: matches the snapshot era in the data)
+        let formatted = format_epoch_ms(1781511529841);
+        assert!(formatted.starts_with("2026-06-15"), "got {formatted}");
+        assert!(formatted.ends_with(" UTC"));
+    }
+
+    #[test]
+    fn format_epoch_ms_unix_epoch() {
+        assert_eq!(format_epoch_ms(0), "1970-01-01 00:00:00 UTC");
+    }
+
+    #[test]
+    fn extract_funmaxxing_merges_bank_and_seed_vault() {
+        // Ranarr (5295) appears in both storages and should be summed.
+        let content = "\
+rsprofile.rsprofile.abc123.displayName=funmaxxing
+dudewheresmystuff.rsprofile.abc123.world.bank=200;5291x10,5295x3
+dudewheresmystuff.rsprofile.abc123.world.seedvault=300;5295x90,5304x26
+";
+        let (items, ts) = extract_funmaxxing_items(content).unwrap();
+        assert_eq!(items.get(&5291), Some(&10));
+        assert_eq!(items.get(&5295), Some(&93)); // 3 (bank) + 90 (seed vault)
+        assert_eq!(items.get(&5304), Some(&26));
+        assert_eq!(ts, Some(300)); // newest of the two storages
+    }
+
+    #[test]
+    fn extract_funmaxxing_prefers_account_with_data() {
+        // Two accounts share the display name; only one has storage data.
+        let content = "\
+rsprofile.rsprofile.empty1.displayName=funmaxxing
+rsprofile.rsprofile.real99.displayName=funmaxxing
+dudewheresmystuff.rsprofile.real99.world.seedvault=500;5295x42
+";
+        let (items, ts) = extract_funmaxxing_items(content).unwrap();
+        assert_eq!(items.get(&5295), Some(&42));
+        assert_eq!(ts, Some(500));
+    }
+
+    #[test]
+    fn extract_funmaxxing_no_account_errors() {
+        let content = "rsprofile.rsprofile.abc.displayName=someoneelse\n";
+        assert!(extract_funmaxxing_items(content).is_err());
+    }
+
+    #[test]
+    fn extract_funmaxxing_account_without_storage_errors() {
+        let content = "rsprofile.rsprofile.abc.displayName=funmaxxing\n";
+        let err = extract_funmaxxing_items(content).unwrap_err();
+        assert!(err.contains("No bank or seed vault data"));
     }
 }
