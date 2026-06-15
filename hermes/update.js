@@ -32,10 +32,12 @@ if (!existsSync(installDir)) {
   process.exit(1);
 }
 
-// 1. Build the frontend (dist/) and the release binary. `cargo build --release`
-//    embeds the freshly built dist, so this produces a complete standalone exe.
-run("npm run build");
-run("cargo build --release", path.join(root, "src-tauri"));
+// 1. Build a production release binary. Must go through the Tauri CLI, not a bare
+//    `cargo build`: the CLI enables the `custom-protocol` feature that switches the
+//    app from the dev server (localhost:5173) to the embedded frontend. `tauri build`
+//    runs the frontend build itself (beforeBuildCommand); --no-bundle skips the NSIS
+//    packaging, leaving just target/release/hermes.exe.
+run("npm run tauri -- build --no-bundle");
 
 if (!existsSync(builtExe)) {
   console.error(`Build did not produce ${builtExe}`);
