@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../api";
 import { LauncherConfig } from "../types";
 
 export function makeLauncher(overrides: Partial<LauncherConfig> = {}): LauncherConfig {

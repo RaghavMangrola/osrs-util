@@ -15,7 +15,7 @@ Cloudflare Pages site (osrs.paalmlabs.com) that displays bank data from the bank
 - See [bank-viewer/CLAUDE.md](bank-viewer/CLAUDE.md) for details.
 
 ### hermes/
-Tauri desktop app (React/TypeScript frontend, Rust backend) for managing and launching OSRS executables — RuneLite configs, farming herb presets, etc. Builds to an MSI installer.
+Local web app for managing and launching OSRS executables — RuneLite configs, farming herb presets, etc. A React/TypeScript frontend (static build) talks over HTTP to a loopback-only Node.js + Express server that spawns processes and edits RuneLite config files. Installable as a PWA; runs as a background service via Task Scheduler. (Originally a Tauri desktop app — the Rust code in `src-tauri/` is kept as reference only.)
 
 - See [hermes/CLAUDE.md](hermes/CLAUDE.md) for details.
 
@@ -37,15 +37,18 @@ cd bank-viewer && npm run check
 # bank-viewer: deploy manually
 cd bank-viewer && npm run deploy
 
-# hermes: dev mode
-cd hermes && npm run tauri dev
+# hermes: build + serve the web app (http://localhost:4317)
+cd hermes && npm run start
+
+# hermes: dev mode (Vite HMR; run "npm run serve" alongside for the API)
+cd hermes && npm run dev
 
 # hermes: run frontend tests
 cd hermes && npm run test
 
-# hermes: build installer
-cd hermes && npm run tauri build
+# hermes: run server tests
+cd hermes && npm run server:test
 
-# hermes: hot-swap update an installed build (no installer)
-cd hermes && npm run update:app
+# hermes: run as a background service — point a Task Scheduler "At log on"
+# task at hermes/server/run-hidden.vbs (build once first)
 ```

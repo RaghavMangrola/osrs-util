@@ -5,6 +5,7 @@ Syncs RuneLite bank data to Cloudflare KV via a Worker. The watcher reads data f
 ## Architecture
 
 - **watcher/** — Node.js script (no dependencies) that polls `$rsprofile--1.properties` every 10 minutes and POSTs bank data to the worker. Runs on Windows via Task Scheduler at login (`run-hidden.vbs` wraps `run.cmd`).
+  - **Scrapped: local supply history.** The watcher could append a JSON snapshot per changed account to `~/Documents/Hermes/dwms-history.jsonl` to feed Hermes' "Supplies" burn-rate tab. That feature was scrapped (unreliable rates), so `recordHistory`/`seedHistoryState` are **kept but no longer called** (calls commented out in `sync()` and main). They have no effect unless re-enabled. The cloud upload path is unaffected.
 - **worker/** — Cloudflare Worker with KV storage. Endpoints: `POST /bank` (ingest), `GET /accounts`, `GET /bank/:hash`. All require Bearer auth.
 - **watcher/parse.js** — Parsing module, tested separately. Reads DWMS item data and resolves account display names from rsprofile keys.
 

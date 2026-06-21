@@ -358,6 +358,274 @@ fn get_herb_seeds() -> Result<BankSeedData, String> {
     Ok(BankSeedData { seeds, snapshot_date })
 }
 
+// --- Supply usage history (SCRAPPED FEATURE) ---
+//
+// This powered the Hermes "Supplies" burn-rate tab, which was scrapped: short
+// observation windows and equip/withdraw churn made the consumption rates
+// untrustworthy. The `get_supply_usage` command remains registered and the logic
+// stays unit-tested, but nothing in the UI calls it (the tab was removed from
+// App.tsx) and the bank-sync watcher no longer writes the history file it reads.
+// Kept as a working reference in case it's revived. See hermes/CLAUDE.md.
+//
+// The bank-sync watcher appended a JSONL line per account whenever that account's
+// items changed (see bank-sync/watcher/sync.js). Each line is one snapshot. We
+// read the whole history, build a per-item time series for one account, and
+// estimate how fast each supply is being consumed.
+
+const MS_PER_DAY: f64 = 86_400_000.0;
+
+fn get_history_path() -> PathBuf {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .expect("Failed to get home directory");
+    PathBuf::from(home).join("Documents").join("Hermes").join("dwms-history.jsonl")
+}
+
+fn item_icon_url(id: i64) -> String {
+    format!("https://static.runelite.net/cache/item/icon/{}.png", id)
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryItem {
+    id: i64,
+    qty: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryRecord {
+    ts: String,
+    hash: String,
+    name: String,
+    #[serde(rename = "snapshotTime")]
+    snapshot_time: Option<i64>,
+    items: Vec<HistoryItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SupplyUsage {
+    pub item_id: i64,
+    pub current_qty: i64,
+    pub start_qty: i64,
+    /// Total units consumed across the window (sum of snapshot-to-snapshot drops;
+    /// restocks don't subtract).
+    pub consumed: i64,
+    /// Average consumption in units per day over the window.
+    pub per_day: f64,
+    /// Projected days until the current quantity runs out at `per_day`.
+    /// `None` when the item isn't being consumed.
+    pub days_to_empty: Option<f64>,
+    pub icon_url: String,
+    pub data_points: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupplyUsageReport {
+    pub account: String,
+    pub available_accounts: Vec<String>,
+    pub first_snapshot: String,
+    pub last_snapshot: String,
+    pub snapshot_count: usize,
+    pub items: Vec<SupplyUsage>,
+}
+
+/// Parse a JS `toISOString()` timestamp ("YYYY-MM-DDTHH:MM:SS.sssZ") to epoch ms.
+/// Inverse of `format_epoch_ms`; used as a fallback when a record has no DWMS
+/// snapshot time.
+fn parse_iso8601_ms(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 19 {
+        return None;
+    }
+    let year: i64 = s.get(0..4)?.parse().ok()?;
+    let month: i64 = s.get(5..7)?.parse().ok()?;
+    let day: i64 = s.get(8..10)?.parse().ok()?;
+    let hh: i64 = s.get(11..13)?.parse().ok()?;
+    let mm: i64 = s.get(14..16)?.parse().ok()?;
+    let ss: i64 = s.get(17..19)?.parse().ok()?;
+    let ms: i64 = if b.get(19) == Some(&b'.') {
+        s.get(20..23).and_then(|x| x.parse().ok()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    // Civil-to-days (Howard Hinnant), inverse of the algorithm in format_epoch_ms.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+
+    Some((days * 86_400 + hh * 3600 + mm * 60 + ss) * 1000 + ms)
+}
+
+/// Best available time for a record: DWMS snapshot time if present, else the
+/// watcher's record time.
+fn record_time_ms(rec: &HistoryRecord) -> Option<i64> {
+    rec.snapshot_time.or_else(|| parse_iso8601_ms(&rec.ts))
+}
+
+/// Compute per-item consumption from time-ordered snapshots. Each snapshot is
+/// `(epoch_ms, {item_id -> qty})`. An item absent from a snapshot is treated as
+/// quantity 0 at that time (DWMS drops emptied items from the list).
+fn compute_usage(snapshots: &[(i64, HashMap<i64, i64>)]) -> Vec<SupplyUsage> {
+    if snapshots.len() < 2 {
+        return Vec::new();
+    }
+
+    let first_t = snapshots.first().unwrap().0;
+    let last_t = snapshots.last().unwrap().0;
+    let span_days = (last_t - first_t) as f64 / MS_PER_DAY;
+
+    let mut ids: Vec<i64> = snapshots
+        .iter()
+        .flat_map(|(_, m)| m.keys().copied())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let mut out = Vec::new();
+    for id in ids {
+        let mut consumed: i64 = 0;
+        let mut max_qty: i64 = 0;
+        let mut prev: Option<i64> = None;
+        for (_, m) in snapshots {
+            let qty = m.get(&id).copied().unwrap_or(0);
+            max_qty = max_qty.max(qty);
+            if let Some(p) = prev {
+                if qty < p {
+                    consumed += p - qty;
+                }
+            }
+            prev = Some(qty);
+        }
+
+        // Only surface items actually being drawn down.
+        if consumed <= 0 {
+            continue;
+        }
+
+        // Skip equipment/uniques: an item that never exceeds 1 in the bank isn't a
+        // stockpiled supply — its 1->0 dips are equip/withdraw churn, not consumption
+        // (e.g. a dragon defender that leaves the bank when worn).
+        if max_qty <= 1 {
+            continue;
+        }
+
+        let current_qty = snapshots.last().unwrap().1.get(&id).copied().unwrap_or(0);
+        let start_qty = snapshots.first().unwrap().1.get(&id).copied().unwrap_or(0);
+        let per_day = if span_days > 0.0 { consumed as f64 / span_days } else { 0.0 };
+        let days_to_empty = if per_day > 0.0 {
+            Some(current_qty as f64 / per_day)
+        } else {
+            None
+        };
+
+        out.push(SupplyUsage {
+            item_id: id,
+            current_qty,
+            start_qty,
+            consumed,
+            per_day,
+            days_to_empty,
+            icon_url: item_icon_url(id),
+            data_points: snapshots.len(),
+        });
+    }
+
+    // Soonest to run out first; items with no estimate (per_day 0) sort last,
+    // tiebroken by fastest burn.
+    out.sort_by(|a, b| {
+        match (a.days_to_empty, b.days_to_empty) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then(b.per_day.partial_cmp(&a.per_day).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    out
+}
+
+/// Build a usage report from the raw JSONL history content. Separated from the
+/// Tauri command so it can be tested without touching the filesystem.
+fn build_report(content: &str, account: Option<String>) -> Result<SupplyUsageReport, String> {
+    let mut records: Vec<HistoryRecord> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(rec) = serde_json::from_str::<HistoryRecord>(trimmed) {
+            records.push(rec);
+        }
+    }
+    if records.is_empty() {
+        return Err("History file contains no usable snapshots yet".to_string());
+    }
+
+    let mut available_accounts: Vec<String> = records.iter().map(|r| r.name.clone()).collect();
+    available_accounts.sort();
+    available_accounts.dedup();
+
+    let target = account.unwrap_or_else(|| FUNMAXXING_DISPLAY_NAME.to_string());
+
+    // The same display name can map to multiple profile hashes; use the hash with
+    // the most snapshots (the actively-tracked one) so timelines don't interleave.
+    let mut by_hash: HashMap<&str, Vec<&HistoryRecord>> = HashMap::new();
+    for rec in &records {
+        if rec.name == target {
+            by_hash.entry(&rec.hash).or_default().push(rec);
+        }
+    }
+    let mut chosen: Vec<&HistoryRecord> = by_hash
+        .into_values()
+        .max_by_key(|v| v.len())
+        .ok_or_else(|| format!("No history for account '{}'", target))?;
+
+    chosen.sort_by_key(|r| record_time_ms(r).unwrap_or(0));
+
+    let snapshots: Vec<(i64, HashMap<i64, i64>)> = chosen
+        .iter()
+        .filter_map(|r| {
+            let t = record_time_ms(r)?;
+            let map = r.items.iter().map(|it| (it.id, it.qty)).collect();
+            Some((t, map))
+        })
+        .collect();
+
+    let first_snapshot = snapshots.first().map(|(t, _)| format_epoch_ms(*t)).unwrap_or_else(|| "unknown".to_string());
+    let last_snapshot = snapshots.last().map(|(t, _)| format_epoch_ms(*t)).unwrap_or_else(|| "unknown".to_string());
+    let items = compute_usage(&snapshots);
+
+    Ok(SupplyUsageReport {
+        account: target,
+        available_accounts,
+        first_snapshot,
+        last_snapshot,
+        snapshot_count: snapshots.len(),
+        items,
+    })
+}
+
+#[tauri::command]
+fn get_supply_usage(account: Option<String>) -> Result<SupplyUsageReport, String> {
+    let path = get_history_path();
+    if !path.exists() {
+        return Err(format!(
+            "No history yet at {}. The bank-sync watcher writes it as snapshots change.",
+            path.display()
+        ));
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    build_report(&content, account)
+}
+
 #[tauri::command]
 fn get_launchers() -> Result<Vec<LauncherConfig>, String> {
     load_launchers()
@@ -458,6 +726,7 @@ pub fn run() {
             update_herb,
             get_valid_herbs,
             get_herb_seeds,
+            get_supply_usage,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -848,5 +1117,196 @@ dudewheresmystuff.rsprofile.real99.world.seedvault=500;5295x42
         let content = "rsprofile.rsprofile.abc.displayName=funmaxxing\n";
         let err = extract_funmaxxing_items(content).unwrap_err();
         assert!(err.contains("No bank or seed vault data"));
+    }
+
+    // --- supply usage history tests ---
+
+    #[test]
+    fn parse_iso8601_ms_roundtrips_with_format_epoch_ms() {
+        // Parsing an ISO string then formatting it must reproduce the same
+        // calendar fields, and the milliseconds must be captured.
+        let iso = "2026-06-17T17:31:29.972Z";
+        let parsed = parse_iso8601_ms(iso).unwrap();
+        assert_eq!(parsed % 1000, 972);
+        assert_eq!(format_epoch_ms(parsed), "2026-06-17 17:31:29 UTC");
+    }
+
+    #[test]
+    fn parse_iso8601_ms_unix_epoch() {
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00.000Z"), Some(0));
+    }
+
+    #[test]
+    fn parse_iso8601_ms_without_millis() {
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:01Z"), Some(1000));
+    }
+
+    fn snap(t: i64, items: &[(i64, i64)]) -> (i64, HashMap<i64, i64>) {
+        (t, items.iter().copied().collect())
+    }
+
+    #[test]
+    fn compute_usage_needs_two_snapshots() {
+        let snaps = vec![snap(0, &[(555, 100)])];
+        assert!(compute_usage(&snaps).is_empty());
+    }
+
+    #[test]
+    fn compute_usage_basic_consumption_rate() {
+        // 1000 -> 500 over exactly 2 days = 250/day, 2 days left at 500.
+        let snaps = vec![
+            snap(0, &[(555, 1000)]),
+            snap(2 * 86_400_000, &[(555, 500)]),
+        ];
+        let usage = compute_usage(&snaps);
+        assert_eq!(usage.len(), 1);
+        let u = &usage[0];
+        assert_eq!(u.item_id, 555);
+        assert_eq!(u.consumed, 500);
+        assert_eq!(u.current_qty, 500);
+        assert_eq!(u.start_qty, 1000);
+        assert!((u.per_day - 250.0).abs() < 1e-6);
+        assert!((u.days_to_empty.unwrap() - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_usage_restock_does_not_offset_consumption() {
+        // 100 -> 60 (used 40) -> 200 (restock) -> 150 (used 50). Total consumed 90.
+        let day = 86_400_000;
+        let snaps = vec![
+            snap(0, &[(565, 100)]),
+            snap(day, &[(565, 60)]),
+            snap(2 * day, &[(565, 200)]),
+            snap(3 * day, &[(565, 150)]),
+        ];
+        let usage = compute_usage(&snaps);
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].consumed, 90);
+        assert_eq!(usage[0].current_qty, 150);
+    }
+
+    #[test]
+    fn compute_usage_treats_missing_item_as_zero() {
+        // Item present then gone entirely => consumed down to 0.
+        let day = 86_400_000;
+        let snaps = vec![
+            snap(0, &[(2, 500), (3, 10)]),
+            snap(day, &[(3, 10)]), // item 2 fully used up and dropped from snapshot
+        ];
+        let usage = compute_usage(&snaps);
+        let two = usage.iter().find(|u| u.item_id == 2).unwrap();
+        assert_eq!(two.consumed, 500);
+        assert_eq!(two.current_qty, 0);
+    }
+
+    #[test]
+    fn compute_usage_excludes_equipment_churn() {
+        // A dragon defender toggling 1 -> 0 -> 1 -> 0 as it's equipped/banked.
+        // Max qty is 1, so it's equipment churn, not a depleting supply.
+        let h = 3_600_000;
+        let snaps = vec![
+            snap(0, &[(12954, 1), (565, 1000)]),
+            snap(h, &[(12954, 0), (565, 900)]),
+            snap(2 * h, &[(12954, 1), (565, 800)]),
+            snap(3 * h, &[(12954, 0), (565, 700)]),
+        ];
+        let usage = compute_usage(&snaps);
+        // Defender filtered out; only the genuine supply (565) remains.
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].item_id, 565);
+        assert!(usage.iter().all(|u| u.item_id != 12954));
+    }
+
+    #[test]
+    fn compute_usage_ignores_items_only_increasing() {
+        let day = 86_400_000;
+        let snaps = vec![
+            snap(0, &[(995, 100)]),
+            snap(day, &[(995, 200)]), // only gained gold, never spent
+        ];
+        assert!(compute_usage(&snaps).is_empty());
+    }
+
+    #[test]
+    fn compute_usage_sorts_soonest_to_empty_first() {
+        let day = 86_400_000;
+        // Item A: 100 -> 90 over a day (10/day, ~9 days left).
+        // Item B: 100 -> 50 over a day (50/day, ~1 day left). B should come first.
+        let snaps = vec![
+            snap(0, &[(10, 100), (20, 100)]),
+            snap(day, &[(10, 90), (20, 50)]),
+        ];
+        let usage = compute_usage(&snaps);
+        assert_eq!(usage[0].item_id, 20);
+        assert_eq!(usage[1].item_id, 10);
+    }
+
+    // --- build_report (JSONL -> report) tests ---
+
+    #[test]
+    fn build_report_end_to_end() {
+        // Two accounts; funmaxxing has two snapshots a day apart with a clear
+        // draw-down on item 565 (blood runes).
+        let jsonl = "\
+{\"ts\":\"2026-06-15T00:00:00.000Z\",\"hash\":\"b-KyAZCf\",\"name\":\"funmaxxing\",\"snapshotTime\":1781481600000,\"items\":[{\"id\":565,\"qty\":1000},{\"id\":995,\"qty\":50}]}
+{\"ts\":\"2026-06-16T00:00:00.000Z\",\"hash\":\"b-KyAZCf\",\"name\":\"funmaxxing\",\"snapshotTime\":1781568000000,\"items\":[{\"id\":565,\"qty\":600},{\"id\":995,\"qty\":80}]}
+{\"ts\":\"2026-06-15T00:00:00.000Z\",\"hash\":\"zz\",\"name\":\"alt\",\"snapshotTime\":1781481600000,\"items\":[{\"id\":565,\"qty\":10}]}
+";
+        let report = build_report(jsonl, None).unwrap();
+        assert_eq!(report.account, "funmaxxing");
+        assert_eq!(report.available_accounts, vec!["alt", "funmaxxing"]);
+        assert_eq!(report.snapshot_count, 2);
+
+        // Only item 565 was consumed (995 only increased).
+        assert_eq!(report.items.len(), 1);
+        let blood = &report.items[0];
+        assert_eq!(blood.item_id, 565);
+        assert_eq!(blood.consumed, 400);
+        assert_eq!(blood.current_qty, 600);
+        assert!((blood.per_day - 400.0).abs() < 1e-6); // 400 over 1 day
+        assert!((blood.days_to_empty.unwrap() - 1.5).abs() < 1e-6); // 600 / 400
+        assert!(blood.icon_url.ends_with("/565.png"));
+    }
+
+    #[test]
+    fn build_report_selects_named_account() {
+        let jsonl = "\
+{\"ts\":\"2026-06-15T00:00:00.000Z\",\"hash\":\"b\",\"name\":\"funmaxxing\",\"snapshotTime\":1,\"items\":[{\"id\":1,\"qty\":5}]}
+{\"ts\":\"2026-06-15T00:00:00.000Z\",\"hash\":\"z\",\"name\":\"alt\",\"snapshotTime\":1,\"items\":[{\"id\":2,\"qty\":9}]}
+";
+        let report = build_report(jsonl, Some("alt".to_string())).unwrap();
+        assert_eq!(report.account, "alt");
+        assert_eq!(report.snapshot_count, 1); // only one snapshot, no usage computable
+        assert!(report.items.is_empty());
+    }
+
+    #[test]
+    fn build_report_picks_hash_with_most_snapshots() {
+        // Same display name across two hashes; the busier hash wins.
+        let jsonl = "\
+{\"ts\":\"2026-06-15T00:00:00.000Z\",\"hash\":\"stale\",\"name\":\"funmaxxing\",\"snapshotTime\":1,\"items\":[{\"id\":1,\"qty\":5}]}
+{\"ts\":\"2026-06-15T00:00:00.000Z\",\"hash\":\"live\",\"name\":\"funmaxxing\",\"snapshotTime\":1781481600000,\"items\":[{\"id\":2,\"qty\":100}]}
+{\"ts\":\"2026-06-16T00:00:00.000Z\",\"hash\":\"live\",\"name\":\"funmaxxing\",\"snapshotTime\":1781568000000,\"items\":[{\"id\":2,\"qty\":40}]}
+";
+        let report = build_report(jsonl, None).unwrap();
+        assert_eq!(report.snapshot_count, 2); // the "live" hash, not "stale"
+        assert_eq!(report.items[0].item_id, 2);
+        assert_eq!(report.items[0].consumed, 60);
+    }
+
+    #[test]
+    fn build_report_skips_malformed_lines() {
+        let jsonl = "\
+not json
+{\"ts\":\"2026-06-15T00:00:00.000Z\",\"hash\":\"b\",\"name\":\"funmaxxing\",\"snapshotTime\":1,\"items\":[{\"id\":1,\"qty\":5}]}
+
+";
+        let report = build_report(jsonl, None).unwrap();
+        assert_eq!(report.snapshot_count, 1);
+    }
+
+    #[test]
+    fn build_report_empty_history_errors() {
+        assert!(build_report("\n\n", None).is_err());
     }
 }

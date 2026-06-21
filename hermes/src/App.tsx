@@ -1,9 +1,13 @@
 import { useState, useEffect, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./api";
 import { LauncherConfig, LauncherFormData } from "./types";
 import LauncherCard from "./components/LauncherCard";
 import LauncherModal from "./components/LauncherModal";
 import HerbSelector from "./components/HerbSelector";
+// SCRAPPED FEATURE: the "Supplies" burn-rate tracker is no longer wired into the
+// UI. The implementation is preserved in ./components/SupplyTracker.tsx (and the
+// `get_supply_usage` Rust command) but intentionally not imported/rendered. See
+// hermes/CLAUDE.md → "Scrapped: supply tracker" for context and how to revive it.
 
 type AppTab = "launchers" | "farming";
 

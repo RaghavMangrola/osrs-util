@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "serve": "node server/server.js",
+    "tray": "node server/tray.js",
+    "start": "npm run build && npm run serve",
+    "server:test": "node --test \"server/*.test.js\"",
     "tauri": "tauri",
     "install:app": "node install.js",
     "update:app": "node update.js",
@@ -28,7 +32,9 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
+    "express": "^5.1.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "systray2": "^2.1.4"
   }
 }
