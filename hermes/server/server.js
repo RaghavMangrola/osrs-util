@@ -13,6 +13,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as launchers from './launchers.js';
 import * as herb from './herb.js';
 import * as seeds from './seeds.js';
+import * as slayer from './slayer.js';
+import * as revenant from './revenant.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +35,10 @@ const handlers = {
   update_herb: herb.updateHerb,
   get_valid_herbs: herb.getValidHerbs,
   get_herb_seeds: seeds.getHerbSeeds,
+  get_slayer_status: slayer.getSlayerStatus,
+  record_rev_task: slayer.recordRevTask,
+  undo_rev_task: slayer.undoRevTask,
+  get_revenant_luck: revenant.getRevenantLuck,
 };
 
 export function createApp() {

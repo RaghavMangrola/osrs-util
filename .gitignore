@@ -4,3 +4,4 @@ dist/
 *.env
 .dev.vars
 bank-sync/watcher/sync.log
+.claude/settings.local.json

@@ -4,15 +4,29 @@ import { LauncherConfig, LauncherFormData } from "./types";
 import LauncherCard from "./components/LauncherCard";
 import LauncherModal from "./components/LauncherModal";
 import HerbSelector from "./components/HerbSelector";
+import SlayerTracker from "./components/SlayerTracker";
 // SCRAPPED FEATURE: the "Supplies" burn-rate tracker is no longer wired into the
 // UI. The implementation is preserved in ./components/SupplyTracker.tsx (and the
 // `get_supply_usage` Rust command) but intentionally not imported/rendered. See
 // hermes/CLAUDE.md → "Scrapped: supply tracker" for context and how to revive it.
 
-type AppTab = "launchers" | "farming";
+type AppTab = "launchers" | "farming" | "slayer";
+
+const TABS: AppTab[] = ["launchers", "farming", "slayer"];
+const ACTIVE_TAB_KEY = "hermes.activeTab";
+
+function loadActiveTab(): AppTab {
+  try {
+    const saved = localStorage.getItem(ACTIVE_TAB_KEY);
+    if (saved && (TABS as string[]).includes(saved)) return saved as AppTab;
+  } catch {
+    // localStorage unavailable (e.g. private mode) — fall back to default.
+  }
+  return "launchers";
+}
 
 function App() {
-  const [activeTab, setActiveTab] = useState<AppTab>("launchers");
+  const [activeTab, setActiveTab] = useState<AppTab>(loadActiveTab);
   const [launchers, setLaunchers] = useState<LauncherConfig[]>([]);
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
@@ -33,6 +47,14 @@ function App() {
   useEffect(() => {
     loadLaunchers();
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_TAB_KEY, activeTab);
+    } catch {
+      // Ignore persistence failures (e.g. storage disabled).
+    }
+  }, [activeTab]);
 
   const categories = useMemo(() => {
     const cats = new Set(launchers.map((l) => l.category || "Uncategorized"));
@@ -121,6 +143,22 @@ function App() {
     setModalOpen(true);
   };
 
+  const handleDuplicate = async (launcher: LauncherConfig) => {
+    try {
+      // Reuse add_launcher with the source's fields (sans id); the server mints
+      // a fresh id. Name gets a " (copy)" suffix to keep duplicates distinct.
+      const { id: _id, ...rest } = launcher;
+      void _id;
+      const data: LauncherFormData = { ...rest, name: `${launcher.name} (copy)` };
+      await invoke("add_launcher", { data });
+      showToast(`Duplicated ${launcher.name}`);
+      await loadLaunchers();
+    } catch (e) {
+      console.error("Failed to duplicate:", e);
+      showToast(`Failed to duplicate: ${e}`);
+    }
+  };
+
   const handleAdd = () => {
     setEditing(null);
     setModalOpen(true);
@@ -131,8 +169,11 @@ function App() {
       <header className="header">
         <div className="header-left">
           <div className="header-title">
-            <span className="logo">⚡</span>
-            <h1>Hermes</h1>
+            <span className="logo">✦</span>
+            <div className="wordmark">
+              <h1>Hermes</h1>
+              <span className="tagline">Launch Bureau · Est. MMXXV</span>
+            </div>
           </div>
           <nav className="app-tabs">
             <button
@@ -146,6 +187,12 @@ function App() {
               onClick={() => setActiveTab("farming")}
             >
               Farming
+            </button>
+            <button
+              className={`app-tab ${activeTab === "slayer" ? "active" : ""}`}
+              onClick={() => setActiveTab("slayer")}
+            >
+              Slayer
             </button>
           </nav>
         </div>
@@ -209,6 +256,7 @@ function App() {
                         launcher={launcher}
                         onLaunch={handleLaunch}
                         onEdit={handleEdit}
+                        onDuplicate={handleDuplicate}
                         onDelete={handleDelete}
                       />
                     ))}
@@ -223,6 +271,7 @@ function App() {
                     launcher={launcher}
                     onLaunch={handleLaunch}
                     onEdit={handleEdit}
+                    onDuplicate={handleDuplicate}
                     onDelete={handleDelete}
                   />
                 ))}
@@ -235,6 +284,12 @@ function App() {
       {activeTab === "farming" && (
         <main className="main">
           <HerbSelector onToast={showToast} />
+        </main>
+      )}
+
+      {activeTab === "slayer" && (
+        <main className="main">
+          <SlayerTracker />
         </main>
       )}
 

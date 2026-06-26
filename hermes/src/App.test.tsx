@@ -228,6 +228,40 @@ describe("App", () => {
     });
   });
 
+  it("duplicates a launcher via add_launcher with a (copy) name", async () => {
+    const user = userEvent.setup();
+    const launcher = makeLauncher({
+      id: "dup-1",
+      name: "Original",
+      category: "Tools",
+      executable: "C:\\app.exe",
+      arguments: "--flag",
+    });
+    mockInvokeWith({ get_launchers: [launcher], add_launcher: undefined });
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Original")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTitle("Duplicate"));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("add_launcher", {
+        data: expect.objectContaining({
+          name: "Original (copy)",
+          executable: "C:\\app.exe",
+          arguments: "--flag",
+          category: "Tools",
+        }),
+      });
+    });
+    // the source id must not be forwarded — the server mints a fresh one
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "add_launcher");
+    expect(call?.[1]).toBeDefined();
+    expect((call?.[1] as { data: Record<string, unknown> }).data).not.toHaveProperty("id");
+  });
+
   it("does not show category tabs with only one category", async () => {
     const launchers = [
       makeLauncher({ id: "1", name: "A", category: "Solo" }),

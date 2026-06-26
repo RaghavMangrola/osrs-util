@@ -12,6 +12,7 @@ describe("LauncherCard", () => {
         launcher={launcher}
         onLaunch={vi.fn()}
         onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -27,6 +28,7 @@ describe("LauncherCard", () => {
         launcher={launcher}
         onLaunch={vi.fn()}
         onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -41,6 +43,7 @@ describe("LauncherCard", () => {
         launcher={launcher}
         onLaunch={vi.fn()}
         onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -55,6 +58,7 @@ describe("LauncherCard", () => {
         launcher={launcher}
         onLaunch={vi.fn()}
         onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -71,6 +75,7 @@ describe("LauncherCard", () => {
         launcher={launcher}
         onLaunch={onLaunch}
         onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -89,12 +94,33 @@ describe("LauncherCard", () => {
         launcher={launcher}
         onLaunch={onLaunch}
         onEdit={onEdit}
+        onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
 
     await user.click(screen.getByTitle("Edit"));
     expect(onEdit).toHaveBeenCalledWith(launcher);
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it("calls onDuplicate when duplicate button is clicked without triggering launch", async () => {
+    const user = userEvent.setup();
+    const onLaunch = vi.fn();
+    const onDuplicate = vi.fn();
+    const launcher = makeLauncher();
+    render(
+      <LauncherCard
+        launcher={launcher}
+        onLaunch={onLaunch}
+        onEdit={vi.fn()}
+        onDuplicate={onDuplicate}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByTitle("Duplicate"));
+    expect(onDuplicate).toHaveBeenCalledWith(launcher);
     expect(onLaunch).not.toHaveBeenCalled();
   });
 
@@ -108,6 +134,7 @@ describe("LauncherCard", () => {
         launcher={launcher}
         onLaunch={onLaunch}
         onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
         onDelete={onDelete}
       />,
     );
